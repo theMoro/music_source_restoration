@@ -1,0 +1,295 @@
+---
+task_name: enhancement_restoration_gan_apollo
+description: >
+  Fine-tunes the pretrained JusperLee/Apollo restoration model
+  (src.models.apollo.apollo_wrapper.ApolloWrapper, https://github.com/JusperLee/Apollo) as a
+  mixture restoration model: clean mixtures (built from mss8s stems) are optionally mastered and
+  degraded with this project's degradation pipeline (src/dsp/enhancement_degradation.py, covering
+  the MSR-Bench degradation types incl. AAC/DAC/EnCodec codecs), and Apollo is trained to
+  reconstruct the clean mixture (GAN + spectral discriminator, partial layer freezing).
+  Validation uses real MSRBench-degraded mixtures.
+
+resume_wandb_id: null  # Set to a wandb run ID to resume training from a previous run
+resume_ckpt_path: null  # Set to a specific checkpoint path to resume training from (overrides resume_wandb_id if set)
+
+finetune_wandb_id: null  # Fine-tuning: set finetune_wandb_id to load last.ckpt from a previous run and start a new wandb run
+finetune_config_filename: null
+
+post_training_wandb_id: null
+post_training_ckpt_path: null
+post_training_config_filename: null
+
+# train config
+train_config:
+  enabled: true
+
+# validation config (validation before and after training, in addition to the validation during training)
+validation_config:
+  enabled: true
+  upload_samples: false
+  upload_ckpt: false
+  validation_samples_path: "resources/validation_wandb_samples.json"
+
+# test config
+test_config:
+  enabled: false
+
+# Dataset paths, relative to the repository root (or absolute). The defaults match the folder
+# layout of SETUP.md; change them (here or on the command line, e.g. dataset_path_8_sources=<path>)
+# if your datasets are stored elsewhere.
+dataset_path_8_sources: "data/hf/mss8s"
+dataset_path_msr_bench: "data/hf/msrbench"
+# Optional prefixes for relative audio paths stored in the HF datasets (the conversion scripts in
+# preprocessing/ store absolute paths, so these are only needed if the audio files were moved).
+prefix_path_8_sources: null
+prefix_path_msr_bench: null
+
+# Optional: folder with real room impulse responses (EchoThief library, see SETUP.md), injected into
+# lightning_module.args.ir_paths (see main_helpers.initialize_components). Only used by the
+# degradation pipeline's "live" category, which then convolves with a real IR instead of the
+# synthetic NoiseShapedReverb. null = disabled.
+ir_paths: null  # TODO (optional): e.g. "data/raw/EchoThiefImpulseResponseLibrary/"
+
+# Seeds: manual_seed is the master seed of the run (pass manual_seed=<seed> to change it). Sacred's
+# `seed` and every seed set to null below are derived from it (src/training/helpers/seeding.py).
+deterministic: True
+manual_seed: 40
+# Final-system runs (see TRAINING.md): manual_seed = 100 * system_seed + stage_idx, with stage_idx
+# 0 = mixture restoration, 1 = separation, 2 = stem restoration dataset generation, 3 = stem-wise
+# restoration. Set by the scripts in scripts/ and logged to wandb; null = not a final-system run.
+system_seed: null
+stage_idx: null
+
+# Delays checkpoint saving (both best-k and last) until this many epochs have completed -- 0
+# disables the delay entirely (see src.training.callbacks.delayed_checkpoint_early_stopping).
+min_epochs_before_ckpt_saving: 0
+
+# Overrides train.callbacks[checkpoint].args.save_top_k (see setup_callbacks in
+# src/training/helpers/main_helpers.py). Equal to the number of validations (max_epochs /
+# check_val_every_n_epoch = 220 / 11 = 20), so every validated checkpoint is kept.
+checkpoint_save_top_k: 20
+
+datamodule:
+  module: src.datamodules.datamodule
+  main: DataModule
+  args:
+    dataloader_generator_seed: null  # null = manual_seed (shuffle, DataLoader workers)
+    train_dataloader:
+      batch_size: 2
+      num_workers: 4
+      persistent_workers: false  # the train dataloader is recreated every epoch (new dataset epoch / worker seeds)
+      shuffle: true
+      pin_memory: false
+      dataset:
+        module: src.data.dataset_8s
+        main: MultiAudioRandomSegmentMixDataset
+        args:
+          split: train
+          dataset_names: null
+          all_dataset_names_except: null
+          duration_column: "duration_seconds"
+          sr: 48000
+          mono: false
+          training_chunk_size: 192000  # 4s @ 48kHz
+          seed: null  # null = manual_seed (chunk offsets / stem selection, per (seed, epoch, item))
+          resample_each_epoch: true
+
+          # mix_probability_total_epochs=0: mix_probability_end (0.0) is used from the first epoch on
+          mix_probability_start: 0.9
+          mix_probability_end: 0.0
+          mix_probability_total_epochs: 0
+          num_stems_to_mix: 8
+          check_chunk_activity: true
+
+          boost_rare_stems: false
+          boost_stems: ["orchestral", "percussions", "synthesizers"]
+          boost_factor: 6.0
+    val_dataloader:
+      batch_size: 1  # full mixtures — variable length, keep batch size small
+      num_workers: 2
+      persistent_workers: false
+      shuffle: false
+      pin_memory: false
+      dataset:
+        module: src.data.msr_bench
+        main: MSRBenchRestorationValDataset
+        args:
+          split: train
+          # Pairs each real MSRBench-degraded mixture with its own origin file's DT0 (clean)
+          # mixture, so validation measures against real MSRBench degradations across every DT
+          # family. DT0 is included (paired against itself -- an identity-mapping check); pass
+          # exclude_dt_families: ["DT0"] to drop it. 0.1 * ~2000 origin files * 13 families =~
+          # 2600 pairs/epoch.
+          subset_fraction: 0.1
+          subset_seed: 42  # fixed (not manual_seed): every training seed is validated on the same clips
+          sr: 48000
+          mono: false
+
+lightning_module:
+  module: src.training.lightningmodule.mixture_restoration_gan
+  main: MixtureRestorationGANLightning
+  args:
+    columns: ["bass", "drums", "other", "vocals", "guitars", "keyboards", "synthesizers", "percussions", "orchestral"]
+    sampling_rate: 48000
+    training_chunk_size: 192000  # 4s @ 48kHz
+    snr_range: [-3.0, 3.0]
+    peak_headroom: 0.93
+    n_sources: 9
+    # Seed of the training degradation / mastering draws, per (seed, epoch, batch, rank);
+    # null = manual_seed.
+    seed: null
+
+    stft_window_sizes: [512, 1024, 2048]  # used for both the reconstruction loss and the discriminator
+    warmup_epochs: 0
+    mel_loss_weight: 0.5
+    mel_snr_loss_weight: 0.04
+    identity_loss_weight: 0.0  # L1 penalty between output and degraded input (disabled)
+    fm_loss_weight: 0.1
+    gan_loss_weight: 0.2
+    # False completely skips discriminator training/inference (requires gan_loss_weight=0 and
+    # fm_loss_weight=0) -- see MixtureRestorationGANLightning's train_discriminator docstring.
+    train_discriminator: True
+    grad_clip_g: 5.0
+    grad_clip_d: 5.0
+    # ExponentialLR, stepped once per training epoch (see val_check_interval below). 0.97^(1/11):
+    # decays by 0.97 every 11 epochs, i.e. 0.544 after 220 epochs.
+    lr_scheduler_gamma: 0.9972348113343723
+    val_check_interval: 1.0  # must match train.trainer.args.val_check_interval
+
+    # Manual optimization bypasses Trainer(accumulate_grad_batches=...), so gradient accumulation
+    # is set here instead. null = fall back to accumulate_grad_batches for that optimizer.
+    accumulate_grad_batches: 1
+    accumulate_grad_batches_g: null
+    accumulate_grad_batches_d: null
+
+    # Degradation scheme (see src/dsp/enhancement_degradation.py)
+    degradation_config:
+      pipeline_version: "v3"  # "v2" or "v3"
+      category_weights: {bandwidth: 0.11, mp3: 0.11, aac: 0.05, dac: 0.10, encodec: 0.10, radio: 0.11, cassette: 0.11, vinyl: 0.11, live: 0.15, clean: 0.05}
+      severe_prob: 0.1
+
+    # Reference mastering pre-step (see MixtureRestorationGANLightning's docstring).
+    apply_mastering_pipeline: True
+    # Per item, with this probability the mixture is mastered (otherwise neither target nor input is).
+    mastering_probability: 0.5
+    # Splits the "mastered" fraction into "paired" (target=input=mastered, prob mastering_pairing_prob)
+    # vs. "de-master" (target=clean, input=mastered, prob 1-mastering_pairing_prob).
+    mastering_pairing_prob: 1.0
+    mastering_pipeline_config:
+      width_db: 1.5
+      target_lufs: -14
+      tp_db: -1
+      oversample: 4
+      lookahead_ms: 1
+      release_ms: 50
+      run_on_gpu: False
+
+    generator:
+      module: src.models.apollo
+      main: ApolloWrapper
+      args:
+        ckpt_path: null  # null auto-downloads the official JusperLee/Apollo checkpoint from the Hugging Face Hub; set to a local pytorch_model.bin to fine-tune from that instead
+        sr: 44100
+        win: 20
+        feature_dim: 256
+        layer: 6
+        # Training batches are already chunked to training_chunk_size (192000 samples), so this is a
+        # no-op during training; the validation set yields full, variable-length songs, which
+        # ApolloWrapper then transparently overlap-add-chunks (avoids OOM).
+        inference_chunk_size: 192000
+        inference_chunk_overlap_ratio: 0.25
+        # Unfreezes the Apollo parameters (default ApolloWrapper is inference-only/frozen).
+        trainable: True
+        # Partial fine-tuning: freeze the pretrained band-split front-end and the first 3 of the 6
+        # BSNet blocks, leaving the last 3 blocks + the output head trainable.
+        freeze_band_split: True
+        num_frozen_bsnet_layers: 3
+        # The datamodule yields 48kHz audio; Apollo only operates correctly at its native 44.1kHz,
+        # so ApolloWrapper resamples 48kHz -> 44.1kHz -> Apollo -> 48kHz around every call.
+        resample_from_sr: 48000
+
+    discriminator:
+      module: src.models.frequency_discriminator
+      main: MultiFrequencyDiscriminator
+      args:
+        nch: 2
+        window: [512, 1024, 2048]
+        hidden_channels: 8
+        # If True, divides real/fake audio by its own RMS before the STFT (see
+        # MultiFrequencyDiscriminator's docstring).
+        normalize_power: False
+
+    optimizer_g:
+      module: torch.optim
+      main: AdamW
+      args:
+        params: null  # assigned automatically
+        lr: 1.5e-6
+        betas: [0.9, 0.999]
+        eps: 0.00000001
+        weight_decay: 0.0
+
+    optimizer_d:
+      module: torch.optim
+      main: AdamW
+      args:
+        params: null  # assigned automatically
+        lr: 3.0e-7  # 0.2 x generator lr
+        betas: [0.9, 0.999]
+        eps: 0.00000001
+        weight_decay: 0.0
+
+train:
+  callbacks:
+    - name: checkpoint
+      module: src.training.callbacks.delayed_checkpoint_early_stopping
+      main: DelayedModelCheckpoint
+      args:
+        monitor: val/mel_snr
+        mode: max
+        every_n_epochs: 1
+        filename: "{epoch}-{val/mel_snr:.3f}"
+        save_top_k: 1  # overridden by the top-level checkpoint_save_top_k
+        save_last: True
+        verbose: False
+        dirpath: null  # Assigned in src.train
+        min_epochs_before_ckpt_saving: 0  # Overridden from top-level min_epochs_before_ckpt_saving in setup_callbacks
+    - name: lr_monitor
+      module: lightning.pytorch.callbacks
+      main: LearningRateMonitor
+      args:
+        logging_interval: epoch
+    - name: tqdm
+      module: lightning.pytorch.callbacks
+      main: TQDMProgressBar
+      args:
+        refresh_rate: 1
+  trainer:
+    module: lightning.pytorch
+    main: Trainer
+    compile: False
+    torch_flags: False
+    channels_last: False
+    args:
+      accelerator: auto
+      devices: 4
+      strategy: ddp_find_unused_parameters_true  # freeze_band_split/num_frozen_bsnet_layers leave some generator params unused in the DDP graph
+      num_nodes: 1
+      precision: bf16-mixed
+      logger: null
+      fast_dev_run: False
+      max_epochs: 220
+      log_every_n_steps: 1
+      use_distributed_sampler: True
+      sync_batchnorm: False
+      check_val_every_n_epoch: 11  # 20 validations (and checkpoints) over 220 epochs
+      val_check_interval: 1.0  # must match lightning_module.args.val_check_interval
+      num_sanity_val_steps: 0
+      enable_checkpointing: True
+      enable_progress_bar: True
+      enable_model_summary: True
+      limit_train_batches: null
+      limit_val_batches: null
+      limit_test_batches: null
+      # NOTE: no gradient_clip_val / accumulate_grad_batches here — this pipeline uses manual
+      # optimization and handles both itself (see lightning_module.args).

@@ -1,0 +1,9 @@
+name: music_source_restoration
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - ffmpeg  # needed for the AAC degradation and museval
+  - pip:
+      - -r requirements.txt

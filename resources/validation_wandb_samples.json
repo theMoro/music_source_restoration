@@ -1,0 +1,158 @@
+{
+  "seed": 42,
+  "num_samples": 30,
+  "segment_seconds": 10.0,
+  "split": "train",
+  "samples": [
+    {
+      "validation_index": 2232,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 2317,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 2446,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 3329,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 4745,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 5233,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 9637,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 10461,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 11247,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 11399,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 11528,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 11705,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 13004,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 13337,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 13678,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 14180,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 16737,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 17001,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 18116,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 18643,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 19117,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 19777,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 20101,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 20316,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 20426,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 21390,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 21824,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 22302,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 24090,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    },
+    {
+      "validation_index": 25348,
+      "segment_seconds": 10.0,
+      "dataset_name": "msr_bench"
+    }
+  ]
+}

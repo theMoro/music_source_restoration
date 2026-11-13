@@ -1,0 +1,447 @@
+---
+task_name: 8s_dataset
+description: >
+  Music source separation into 9 stems (bass, drums, other, vocals, guitars, keyboards,
+  synthesizers, percussions, orchestral) with BS-RoFormer, fine-tuned from the 6-stem BS-RoFormer-SW
+  checkpoint on the mss8s dataset with random stem mixing and a data scheduler.
+
+resume_wandb_id: null  # Set to a wandb run ID to resume training from a previous run
+resume_ckpt_path: null  # Set to a specific checkpoint path to resume training from (overrides resume_wandb_id if set)
+
+finetune_wandb_id: null  # Fine-tuning: set finetune_wandb_id to load last.ckpt from a previous run and start a new wandb run
+finetune_config_filename: null
+
+post_training_wandb_id: null  # Set to a wandb run ID to load a specific checkpoint for post-training processes (dataset generation, evaluation)
+post_training_ckpt_path: null  # Set to a specific checkpoint path to load directly for post-training processes (mutually exclusive with post_training_wandb_id)
+post_training_config_filename: null  # Config filename (= checkpoint sub-folder) of the run given by post_training_wandb_id
+
+# train config
+train_config:
+  enabled: true
+
+# validation config (validation before and after training, in addition to the validation during training)
+validation_config:
+  enabled: true
+  upload_samples: true
+  upload_ckpt: false
+  # Fixed validation samples for the wandb audio sample uploads
+  validation_samples_path: "resources/validation_wandb_samples.json"
+
+# test config: evaluation on the MSR challenge test set (trainer.test(), driven by datamodule.args.test_dataloader)
+test_config:
+  enabled: false
+  per_stem_metrics_output_path: null  # optional CSV with the per-stem test metrics
+
+# Generate the stem restoration dataset (enable with the `generate_restoration_dataset` named config)
+generate_inference_dataset_config:
+  enabled: false
+  output_dir: null
+  num_samples: 4592
+  save_interval: 100
+  split: train
+  seed: null  # null = manual_seed (per-sample seeds of the augmentations / mixtures)
+  only_merge_existing_datasets: False
+  num_epochs: 10
+
+# MSRBench inference + evaluation (run model on MSRBench, compute metrics, optionally save predictions)
+msrbench_inference_eval_config:
+  enabled: false
+  split: train  # MSRBench split to use
+  batch_size: 2
+  num_workers: 0
+  # Available metrics: sdr, snr, si_snr, multi_mel_snr, zimtohrli, mel_ssim, mel_kl_div, kl, pesq, production_quality, log_wmse, fad_clap, l1_freq, aura_stft, aura_mrstft, bleed, fullness
+  prediction_metrics: ["sdr", "snr", "si_snr", "multi_mel_snr", "zimtohrli", "mel_ssim", "mel_kl_div", "kl", "pesq", "production_quality", "log_wmse", "fad_clap", "l1_freq", "aura_stft", "aura_mrstft", "bleed", "fullness"]
+  prediction_pesq_sample_rate: 16000
+  prediction_mel_config:
+    n_fft: 1024
+    hop_length: 512
+    n_mels: 128
+  shuffle: false  # Shuffle MSRBench dataloader
+  save_predictions: false  # If true, also save separated stem predictions to disk
+  output_dir: null  # Required if save_predictions is true; output directory for saved predictions
+  per_sample_scores_output_path: null  # If set, write per-sample metric scores to this CSV path
+  per_stem_metrics_output_path: null  # If set, write a second CSV with per-stem (+overall_mean) aggregated metrics, incl. FAD-CLAP
+
+# Dataset paths, relative to the repository root (or absolute). The defaults match the folder
+# layout of SETUP.md; change them (here or on the command line, e.g. dataset_path_8_sources=<path>)
+# if your datasets are stored elsewhere.
+dataset_path_8_sources: "data/hf/mss8s"
+dataset_path_msr_bench: "data/hf/msrbench"
+# Local snapshot of the MSRChallenge/2025TestSet eval set (see SETUP.md). Only used when
+# test_config.enabled=True.
+dataset_path_msr_test_set_2025: "data/raw/msr_test_set_2025"
+# Optional prefixes for relative audio paths stored in the HF datasets (the conversion scripts in
+# preprocessing/ store absolute paths, so these are only needed if the audio files were moved).
+prefix_path_8_sources: null
+prefix_path_msr_bench: null
+
+# Optional: folder with real room impulse responses (EchoThief library, see SETUP.md), injected into
+# lightning_module.args.ir_paths (see main_helpers.initialize_components). Only used by the
+# degradation pipeline's "live" category, which then convolves with a real IR instead of the
+# synthetic NoiseShapedReverb. null = disabled.
+ir_paths: null  # TODO (optional): e.g. "data/raw/EchoThiefImpulseResponseLibrary/"
+
+# Seeds: manual_seed is the master seed of the run (pass manual_seed=<seed> to change it). Sacred's
+# `seed` and every seed set to null below are derived from it (src/training/helpers/seeding.py).
+deterministic: True
+manual_seed: 42
+# Final-system runs (see TRAINING.md): manual_seed = 100 * system_seed + stage_idx, with stage_idx
+# 0 = mixture restoration, 1 = separation, 2 = stem restoration dataset generation, 3 = stem-wise
+# restoration. Set by the scripts in scripts/ and logged to wandb; null = not a final-system run.
+system_seed: null
+stage_idx: null
+
+datamodule:
+  module: src.datamodules.datamodule
+  main: DataModule
+  args:
+    dataloader_generator_seed: null  # null = manual_seed (WeightedRandomSampler / shuffle, DataLoader workers)
+    train_dataloader:
+      batch_size: 1
+      num_workers: 4
+      persistent_workers: false
+      shuffle: true
+      pin_memory: false
+      dataset:
+        module: src.data.dataset_8s
+        main: MultiAudioRandomSegmentMixDataset
+        args:
+          split: train
+          dataset_names: null  # Use all available datasets
+          all_dataset_names_except: null  # Alternative to dataset_names: exclude specific datasets and use all others
+          duration_column: "duration_seconds"
+          sr: 48000
+          mono: false
+          training_chunk_size: 480000
+          seed: null  # null = manual_seed (segment / mix RNG)
+          resample_each_epoch: true
+
+          # random mixing: probability of creating a random mix of stems from different songs
+          mix_probability_start: 0.9   # probability at epoch 0
+          mix_probability_end: 0.0     # probability at mix_probability_total_epochs (and beyond)
+          mix_probability_total_epochs: 170  # epochs over which to linearly interpolate
+          num_stems_to_mix: 8
+          # true:  require >=80% of the 10-s chunk to be active when selecting offsets; fill
+          #        silent stems with extra samples.
+          # false: only require the anchor second to be active in the activity mask.
+          check_chunk_activity: true
+
+          # boost rare stems
+          boost_rare_stems: false
+          boost_stems: ["orchestral", "percussions", "synthesizers"]
+          boost_factor: 6.0
+    val_dataloader:
+      batch_size: 2
+      num_workers: 0
+      persistent_workers: false
+      shuffle: false
+      pin_memory: false
+      dataset:
+        module: src.data.msr_bench
+        main: MultiAudioFullSongDataset
+        args:
+          split: train
+          columns: ["bass", "drums", "other", "vocals", "guitars", "keyboards", "synthesizers", "percussions", "orchestral"]
+          filter_dt_families: ["DT0"]
+          presence_suffix: "_is_present"
+          sr: 48000
+          mono: false
+    # MSRChallenge/2025TestSet evaluation (trainer.test(), driven by test_config.enabled).
+    # root is injected automatically from dataset_path_msr_test_set_2025; only the
+    # non-blind/streaming subsets have targets, so only those are usable for evaluation.
+    test_dataloader:
+      batch_size: 2
+      num_workers: 0
+      persistent_workers: false
+      shuffle: false
+      pin_memory: false
+      dataset:
+        module: src.data.msr_test_set_2025
+        main: MSRTestSet2025Dataset
+        args:
+          subsets: ["non-blind", "streaming"]
+          columns: ["bass", "drums", "other", "vocals", "guitars", "keyboards", "synthesizers", "percussions", "orchestral"]
+          sr: 48000
+          mono: false
+    data_scheduler:
+      enabled: true
+      schedule_function:
+        module: src.datamodules.data_scheduler_utils
+        function: size_proportional_with_decay
+        args:
+          decay_datasets:
+            slakh2100:
+              decay_type: exponential
+              zero_at_epoch: 170
+            synthsod:
+              decay_type: exponential
+              zero_at_epoch: 9
+            vocalset:
+              decay_type: exponential
+              zero_at_epoch: 9
+      percentages:
+        maestro: 0.04
+        slakh2100: 0.05
+        idmt_smt_bass: 0.10
+        synthsod: 0.10
+        vocalset: 0.10
+
+lightning_module:
+  module: src.training.lightningmodule.multisource_separation
+  main: MultiSourceSeparationLightning
+  args:
+    n_sources: 9
+    train_other_stem: False  # Set to true to include 'other' stem in loss and validation metrics
+    debug: false
+
+    # Available metrics: sdr, si_snr, multi_mel_snr, zimtohrli, log_wmse, fad_clap, l1_freq, aura_stft, aura_mrstft, bleed, fullness, mel_ssim, mel_kl_div
+    val_metrics: ["sdr", "si_snr", "multi_mel_snr", "zimtohrli", "log_wmse", "fad_clap", "l1_freq", "aura_stft", "aura_mrstft", "bleed", "fullness", "mel_ssim", "mel_kl_div"]
+    test_metrics: ["sdr", "si_snr", "multi_mel_snr", "zimtohrli", "fad_clap"]
+
+    fad_clap_batch_size: 2  # Batch size for FAD-CLAP embedding calculation
+    fad_clap_max_samples: 0  # Maximum clips per stem (per GPU) for FAD-CLAP; 0 = all clips
+    fad_clap_force_cpu: false  # Force CPU usage to avoid CUDA compatibility issues
+    sampling_rate: 48000
+    min_lufs: -50.0  # Minimum integrated LUFS required to consider audio clip non-silent
+    training_chunk_size: 480000
+    use_ema: true  # Exponential Moving Average of the model weights
+    ema_decay: 0.999
+
+    progress_bar_metrics: [ "step_train/loss", "epoch_train/loss", "epoch_train/si_snr_loss", "epoch_train/l1_loss", "epoch_train/mr_stft_loss" ]
+
+    apply_music_effect_pipeline: true
+    apply_mastering_pipeline: false
+    # Only apply music_effect_pipeline for these dataset_name values. Set to null to apply to all.
+    music_effect_pipeline_dataset_names: [ "raw_stems" ]
+    target_key: "aug_waveform"
+    snr_range: [ 0.0, 10.0 ]
+    gain_range: [ 0.5, 1.0 ]
+
+    music_effect_pipeline_config:
+      run_on_gpu: false
+      noise_snr_db: [ 24.0, 48.0 ]
+      high_pass_hz: [ 100.0, 150.0 ]
+      low_pass_hz: [ 12000.0, 20000.0 ]
+      ir_p: 0.1
+      downsample_target_rate: 22050
+      enable_low_pass: false
+      low_pass_p: 0.1
+      enable_reverb: false
+      reverb_p: 0.05
+
+    mastering_pipeline_config:
+      run_on_gpu: false
+      apply_prob: 0.1
+      enable_mp3: false
+      tp_db: -1.0
+      width_db: 0.0
+      oversample: 4
+      lookahead_ms: 1.0
+      release_ms: 50.0
+
+    model:
+      module: src.models.multiple_models_wrapper
+      main: MultipleModelsWrapper
+      args:
+        separate: true
+        train_separation_model: true
+        apollo: false  # mixture restoration before separation (full system evaluation only)
+        apollo_stemwise: false  # stem-wise restoration after separation (full system evaluation only)
+
+        resample_to_44100_for_model: true
+
+        separation_model:
+          module: src.models.bs_roformer.roformer_wrapper
+          main: RoformerWrapper
+          args:
+            dim: 256
+            depth: 12
+            heads: 8
+            head_dim: 64
+            stereo: true
+            num_stems: 9
+            mlp_expansion_factor: 4
+            load_pretrained: true
+            model_type: "8s_separation"
+            n_pretrained_stems: 6
+            stft_hop_length: 512
+            inference_chunk_overlap_ratio: 0.5
+            inference_chunk_size: 441000
+
+            mask_max_value: 1.0
+            finetune_attention_layers: true  # Whether to fine-tune attention layers
+            finetune_feedforward_layers: true  # Whether to fine-tune feedforward layers in transformer blocks
+            finetune_bandsplit_module: false  # Whether to train BandSplit module parameters
+            finetune_pretrained_mask_estimators: true  # Whether to train pretrained mask estimators
+            finetune_new_mask_estimators: true  # Whether to train new mask estimators
+
+        # JusperLee/Apollo (https://github.com/JusperLee/Apollo) mixture restoration model
+        # (inference-only). Enable with apollo=True; requires resample_to_44100_for_model=True since
+        # Apollo only operates at its native 44.1kHz.
+        apollo_model:
+          module: src.models.apollo
+          main: ApolloWrapper
+          args:
+            # null auto-downloads the official pretrained weights from the Hugging Face Hub
+            # (JusperLee/Apollo). Set to the fine-tuned mixture restoration checkpoint.
+            ckpt_path: null
+            sr: 44100
+            win: 20
+            feature_dim: 256
+            layer: 6
+            # Overlap-add chunking in samples at Apollo's native 44.1kHz (the 48kHz input is resampled
+            # first); same setting as the mixture restoration validation. null = whole clip in one pass.
+            inference_chunk_size: 192000
+            inference_chunk_overlap_ratio: 0.25
+
+        # Post-separation, per-stem Apollo restoration (apollo_stemwise=True). Resolves one
+        # fine-tuned checkpoint per stem under ckpt_root (<ckpt_root>/<version>/<stem>/<wandb_id>/),
+        # falling back to a single shared checkpoint (shared_ckpt_path, or auto-download if that's
+        # also null) for any stem without its own fine-tuned one. Also requires
+        # resample_to_44100_for_model=True.
+        apollo_stemwise_model:
+          module: src.models.apollo
+          main: ApolloStemwiseRestorationWrapper
+          args:
+            columns: ["bass", "drums", "other", "vocals", "guitars", "keyboards", "synthesizers", "percussions", "orchestral"]
+            # Top-level folder containing every <stem_restoration_version>/<stem>/<wandb_id>/ run.
+            ckpt_root: null
+            # Pin resolution to one <version> subfolder under ckpt_root; null searches every version folder.
+            ckpt_version: null
+            # Map stem -> wandb run id, e.g. "{'vocals': 'ab12cd34'}". A stem left out (or null) is
+            # auto-selected, which only works if exactly one checkpoint exists for that stem.
+            ckpt_ids:
+              bass: null
+              drums: null
+              other: null
+              vocals: null
+              guitars: null
+              keyboards: null
+              synthesizers: null
+              percussions: null
+              orchestral: null
+            ckpt_filename: "last.ckpt"
+            # Per-stem override of ckpt_filename (e.g. ckpt_filenames.vocals=epoch=12.ckpt)
+            ckpt_filenames:
+              bass: null
+              drums: null
+              other: null
+              vocals: null
+              guitars: null
+              keyboards: null
+              synthesizers: null
+              percussions: null
+              orchestral: null
+            skip_stems: []  # stems that pass through unrestored
+            # null auto-downloads the official pretrained Apollo checkpoint for use as the shared fallback.
+            shared_ckpt_path: null
+            generator_args:
+              sr: 44100
+              win: 20
+              feature_dim: 256
+              layer: 6
+            # Same chunking as apollo_model above (samples at 44.1kHz); null = whole clip in one pass.
+            inference_chunk_size: 192000
+            inference_chunk_overlap_ratio: 0.25
+
+    loss:
+      module: src.training.loss.combined_loss
+      main: get_loss_func
+      args:
+        # Per-source stem weights for L1 and MR-STFT losses.
+        # Order must match columns: bass, drums, other, vocals, guitars, keyboards, synthesizers, percussions, orchestral.
+        stem_weights: [1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+        # L1 loss parameters
+        l1_base_weight: 1.0      # Base weight for L1 scaling
+        l1_max_weight: 1.0       # Maximum allowed L1 weight
+
+        # SI-SNR loss parameters
+        si_snr_weight: 0.0
+
+        # SNR loss parameters (non-scale-invariant)
+        snr_weight: 0.0
+
+        # Multi-Mel SNR loss parameters
+        multi_mel_snr_weight: 0.0
+        multi_mel_snr_sample_rate: 48000
+
+        # Low amplitude penalty loss parameters
+        low_amplitude_penalty_weight: 0.0
+        low_amplitude_ratio: 0.5
+        low_amplitude_target_floor: 1.0e-4
+
+        # Multi-Resolution STFT loss parameters
+        multi_stft_resolution_loss_weight: 1.0
+        multi_stft_resolutions_window_sizes: [ 4096, 2048, 1024, 512, 256 ]
+        multi_stft_hop_size: 147
+        multi_stft_normalized: false
+        multi_stft_n_fft: 2048
+    optimizer:
+      module: torch.optim
+      main: AdamW
+      split_params: true
+      args:
+        params: null  # assigned automatically
+        lr: 4.0e-4
+        betas: [ 0.9, 0.999 ]
+        eps: 0.00000001
+        weight_decay: 0.0
+        amsgrad: true
+
+      # Layer-wise LR decay in (0, 1]: lr_decay_factor < 1.0 gives earlier transformer layers a lower
+      # learning rate (layer 0 gets lr * lr_decay_factor, the last layer gets lr); 1.0 disables it
+      lr_decay_factor: 0.95
+
+    lr_scheduler:
+      schedule_mode: 'linear'  # linear warmup, then linear decay to lr_end
+      num_warmup_steps: 8000
+      lr_end: 1.0e-4
+
+train:
+  callbacks:
+    - name: checkpoint
+      module: lightning.pytorch.callbacks
+      main: ModelCheckpoint
+      args:
+        every_n_epochs: 1
+        filename: "{epoch}"
+        save_top_k: 0  # Disable saving top-k checkpoints, only save last
+        save_last: True
+        verbose: False
+        dirpath: null  # Assigned in src.train
+    - name: tqdm
+      module: lightning.pytorch.callbacks
+      main: TQDMProgressBar
+      args:
+        refresh_rate: 1
+  trainer:
+    module: lightning.pytorch
+    main: Trainer
+    compile: False
+    torch_flags: False
+    channels_last: False
+    args:
+      accelerator: auto
+      devices: 4
+      strategy: ddp_find_unused_parameters_true
+      num_nodes: 1
+      precision: 16-mixed
+      logger: null
+      fast_dev_run: False
+      max_epochs: 200
+      max_steps: -1
+      log_every_n_steps: 1
+      use_distributed_sampler: True
+      sync_batchnorm: True
+      check_val_every_n_epoch: 10  # validate every 10 epochs; train.py also runs an explicit final validation after fit()
+      val_check_interval: 1.0
+      num_sanity_val_steps: 0
+      enable_checkpointing: True
+      enable_progress_bar: True
+      enable_model_summary: True
+      limit_train_batches: null
+      limit_val_batches: null
+      limit_test_batches: null
+      gradient_clip_val: 0.5
+      accumulate_grad_batches: 2

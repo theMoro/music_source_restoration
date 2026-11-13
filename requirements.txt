@@ -1,0 +1,55 @@
+# PyTorch with CUDA 12.1 (adapt the index URL to your CUDA version, see https://pytorch.org)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchaudio==2.5.1
+
+# training
+lightning==2.5.1
+pytorch-lightning==2.5.1
+torchmetrics==1.7.0
+sacred
+setuptools<81  # sacred imports pkg_resources (removed in setuptools 81)
+munch
+pyyaml
+packaging
+wandb
+tqdm
+
+# data
+datasets==4.2.0
+huggingface-hub>=0.34  # provides the `hf` command
+numpy<2.1
+scipy
+librosa==0.11.0
+soundfile
+pyarrow
+
+# models
+einops
+beartype
+rotary-embedding-torch
+hyper-connections
+transformers==4.50.0
+omegaconf  # needed to load the official Apollo checkpoint (pickled omegaconf objects)
+
+# augmentation / degradation
+torch_audiomentations
+dasp_pytorch
+fast_mp3_augment
+pyloudnorm
+loudness
+encodec
+descript-audio-codec
+
+# metrics
+museval
+zimtohrli
+scikit-image
+auraloss
+torch-log-wmse
+audiobox-aesthetics
+# pypesq needs CFLAGS="-Wno-error=incompatible-pointer-types" with GCC >= 14 (see SETUP.md)
+pypesq @ https://github.com/vBaiCai/python-pesq/archive/master.zip
+
+# tests
+pytest

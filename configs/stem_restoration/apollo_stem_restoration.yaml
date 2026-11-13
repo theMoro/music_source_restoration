@@ -1,0 +1,256 @@
+---
+task_name: stem_restoration_gan_apollo
+description: >
+  Fine-tunes the mixture restoration model (Apollo, src.models.apollo.apollo_wrapper.ApolloWrapper,
+  https://github.com/JusperLee/Apollo) into a per-stem restoration model: input = the source
+  separation model's stem prediction (augmented), target = the raw, unaugmented ground-truth stem.
+  One training run = one stem. Pairs come from src.data.stem_restoration_dataset.StemRestorationDataset,
+  reading the `final_dataset` produced by generate_inference_dataset_with_trainer
+  (scripts/stem_restoration/generate_dataset.sh).
+
+  Checkpoints are written to <stem_restoration_ckpt_root>/<stem_restoration_version>/<stem>/<wandb_id>/
+  (see main_helpers.setup_callbacks) instead of the usual wandb-id-keyed path, so
+  src.models.apollo.apollo_stemwise_wrapper.ApolloStemwiseRestorationWrapper (the `apollo_stemwise`
+  flag of MultipleModelsWrapper) can be pointed at a single <stem_restoration_ckpt_root> folder at
+  inference time and pick up every stem's checkpoint.
+
+resume_wandb_id: null
+resume_ckpt_path: null
+
+finetune_wandb_id: null
+finetune_config_filename: null
+
+post_training_wandb_id: null
+post_training_ckpt_path: null
+post_training_config_filename: null
+
+train_config:
+  enabled: true
+
+validation_config:
+  enabled: true
+  upload_samples: false
+  upload_ckpt: false
+  validation_samples_path: "resources/validation_wandb_samples.json"
+
+test_config:
+  enabled: false
+
+# Not used by this pipeline (the dataset is given by dataset_root below), but required by src.train
+dataset_path_8_sources: "data/hf/mss8s"
+dataset_path_msr_bench: "data/hf/msrbench"
+
+ir_paths: null
+
+# Seeds: manual_seed is the master seed of the run (pass manual_seed=<seed> to change it). Sacred's
+# `seed` and every seed set to null below are derived from it (src/training/helpers/seeding.py).
+deterministic: True
+manual_seed: 40
+# Final-system runs (see TRAINING.md): manual_seed = 100 * system_seed + stage_idx, with stage_idx
+# 0 = mixture restoration, 1 = separation, 2 = stem restoration dataset generation, 3 = stem-wise
+# restoration. Set by the scripts in scripts/ and logged to wandb; null = not a final-system run.
+system_seed: null
+stage_idx: null
+
+# --- Stem-wise restoration fine-tuning knobs ---
+# Which stem this run trains a restoration model for, e.g. "vocals". Propagated automatically
+# into both datamodule.args.train_dataloader.dataset.args.stem and
+# .val_dataloader.dataset.args.stem by main_helpers.initialize_components.
+stem: null
+
+# Path to the `final_dataset` folder produced by generate_inference_dataset_with_trainer.
+# Propagated the same way as `stem` above. Must be set (set by scripts/stem_restoration/train_apollo.sh).
+dataset_root: null  # TODO: set to <generated dataset>/final_dataset
+
+# Parent folder + version subfolder that per-stem checkpoints get written under, i.e. checkpoints
+# land at <stem_restoration_ckpt_root>/<stem_restoration_version>/<stem>/<wandb_id>/last.ckpt. Both
+# must be set (non-null) for this override to take effect; otherwise the usual wandb-id-keyed
+# checkpoint path is used (see main_helpers.setup_callbacks).
+stem_restoration_ckpt_root: null
+stem_restoration_version: "apollo_v1"
+
+datamodule:
+  module: src.datamodules.datamodule
+  main: DataModule
+  args:
+    dataloader_generator_seed: null  # null = manual_seed (WeightedRandomSampler / shuffle, DataLoader workers)
+    # Linearly decays every dataset except raw_stems to 0 over the first epochs (only relevant if
+    # the restoration dataset was generated from several datasets).
+    data_scheduler:
+      enabled: true
+      schedule_function:
+        module: src.datamodules.data_scheduler_utils
+        function: decay_to_single_dataset
+        args:
+          keep_dataset: "raw_stems"
+          decay_type: "linear"
+          zero_at_epoch: 5
+    train_dataloader:
+      batch_size: 2
+      num_workers: 4
+      persistent_workers: false  # the train dataloader is recreated every epoch (new dataset epoch / worker seeds)
+      shuffle: true
+      pin_memory: false
+      dataset:
+        module: src.data.stem_restoration_dataset
+        main: StemRestorationDataset
+        args:
+          dataset_root: null  # set via top-level dataset_root
+          stem: null  # set via top-level stem
+          split: train
+          # Held-out validation split: val_fraction of the val_dataset_name samples of this stem
+          val_fraction: 0.2
+          val_dataset_name: "raw_stems"
+          input_column: "separated_stem"
+          target_column: "clean_stem"
+          sr: 48000
+          seed: 42  # train/val split seed: fixed (not manual_seed), must equal the val dataset's seed
+          chunk_seed: null  # null = manual_seed (chunk offsets, per (chunk_seed, epoch, item))
+          training_chunk_size: 192000
+    val_dataloader:
+      batch_size: 2
+      num_workers: 2
+      persistent_workers: false
+      shuffle: false
+      pin_memory: false
+      dataset:
+        module: src.data.stem_restoration_dataset
+        main: StemRestorationDataset
+        args:
+          dataset_root: null  # set via top-level dataset_root
+          stem: null  # set via top-level stem
+          split: val
+          val_fraction: 0.2
+          val_dataset_name: "raw_stems"
+          input_column: "separated_stem"
+          target_column: "clean_stem"
+          sr: 48000
+          seed: 42  # train/val split seed, see above; also seeds the (fixed) validation chunk offsets
+          training_chunk_size: 192000
+
+lightning_module:
+  module: src.training.lightningmodule.stem_restoration_gan
+  main: StemRestorationGANLightning
+  args:
+    sampling_rate: 48000
+    n_sources: 9
+    stft_window_sizes: [512, 1024, 2048]
+    warmup_epochs: 0
+    mel_loss_weight: 0.5
+    mel_snr_loss_weight: 0.04
+    fm_loss_weight: 0.1
+    gan_loss_weight: 0.5
+    # False completely skips discriminator training/inference (requires gan_loss_weight=0 and
+    # fm_loss_weight=0) -- see StemRestorationGANLightning's train_discriminator docstring.
+    train_discriminator: True
+    grad_clip_g: 5.0
+    grad_clip_d: 5.0
+    lr_scheduler_gamma: 0.97
+    val_check_interval: 1.0
+    # Manual optimization bypasses Trainer(accumulate_grad_batches=...), so gradient accumulation
+    # is set here instead. accumulate_grad_batches_g=8 at batch_size=2 gives G an effective batch
+    # of 16; D steps every batch.
+    accumulate_grad_batches: 1
+    accumulate_grad_batches_g: 8
+    accumulate_grad_batches_d: 1
+    # Number of fixed validation samples logged to wandb as degraded/enhanced/clean audio every
+    # validation epoch (0 = disabled).
+    num_val_audio_samples: 0
+    generator:
+      module: src.models.apollo
+      main: ApolloWrapper
+      args:
+        ckpt_path: null  # set to the mixture restoration checkpoint (null auto-downloads the official JusperLee/Apollo checkpoint)
+        sr: 44100
+        win: 20
+        feature_dim: 256
+        layer: 6
+        inference_chunk_size: null  # must stay null during training/validation
+        inference_chunk_overlap_ratio: 0.25
+        # Unfreezes the Apollo parameters (default ApolloWrapper is inference-only/frozen).
+        trainable: True
+        # Partial fine-tuning: freeze the band-split front-end and the first 3 of the 6 BSNet blocks.
+        freeze_band_split: True
+        num_frozen_bsnet_layers: 3
+        # The dataset yields 48kHz audio; ApolloWrapper resamples 48kHz -> 44.1kHz -> Apollo -> 48kHz.
+        resample_from_sr: 48000
+    discriminator:
+      module: src.models.frequency_discriminator
+      main: MultiFrequencyDiscriminator
+      args:
+        nch: 2
+        window: [512, 1024, 2048]
+        hidden_channels: 8
+        normalize_power: false
+        use_spectral_norm: true
+    optimizer_g:
+      module: torch.optim
+      main: AdamW
+      args:
+        params: null  # assigned automatically
+        lr: 1.0e-5  # set per run in scripts/stem_restoration/train_apollo.sh
+        betas: [0.9, 0.999]
+        eps: 0.00000001
+        weight_decay: 0.0
+    optimizer_d:
+      module: torch.optim
+      main: AdamW
+      args:
+        params: null  # assigned automatically
+        lr: 6.0e-6  # set per run in scripts/stem_restoration/train_apollo.sh (0.6 * lr_g)
+        betas: [0.9, 0.999]
+        eps: 0.00000001
+        weight_decay: 0.0
+
+train:
+  callbacks:
+    - name: checkpoint
+      module: lightning.pytorch.callbacks
+      main: ModelCheckpoint
+      args:
+        monitor: val/mel_snr
+        mode: max
+        every_n_epochs: 1
+        filename: "{epoch}-{val/mel_snr:.3f}"
+        save_top_k: 1
+        save_last: True
+        verbose: False
+        dirpath: null  # Assigned in main_helpers.setup_callbacks
+    - name: lr_monitor
+      module: lightning.pytorch.callbacks
+      main: LearningRateMonitor
+      args:
+        logging_interval: epoch
+    - name: tqdm
+      module: lightning.pytorch.callbacks
+      main: TQDMProgressBar
+      args:
+        refresh_rate: 1
+  trainer:
+    module: lightning.pytorch
+    main: Trainer
+    compile: False
+    torch_flags: False
+    channels_last: False
+    args:
+      accelerator: auto
+      devices: 1  # small, stem-specific dataset: run one single-GPU job per stem rather than DDP
+      strategy: ddp_find_unused_parameters_true
+      num_nodes: 1
+      precision: bf16-mixed
+      logger: null
+      fast_dev_run: False
+      max_epochs: 40
+      log_every_n_steps: 1
+      use_distributed_sampler: True
+      sync_batchnorm: False
+      check_val_every_n_epoch: 1
+      val_check_interval: 1.0
+      num_sanity_val_steps: 0
+      enable_checkpointing: True
+      enable_progress_bar: True
+      enable_model_summary: True
+      limit_train_batches: null
+      limit_val_batches: null
+      limit_test_batches: null
+      reload_dataloaders_every_n_epochs: 1
