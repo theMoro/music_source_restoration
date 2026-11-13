@@ -1,6 +1,6 @@
 # Metrics Reference
 
-All metrics used in this codebase for evaluating source separation quality.
+All metrics used in this codebase for evaluating source separation / restoration quality.
 
 ---
 

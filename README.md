@@ -1,8 +1,8 @@
-# Music Source Restoration
+# Music Source Restoration (MSR)
 
 Code for our music source restoration system, which restores degraded music mixtures and separates
-them into the stems vocals, guitars, bass, keyboards, synthesizers, drums, percussions and
-orchestral. The system consists of three models that are trained separately:
+them into the stems _vocals_, _guitars_, _bass_, _keyboards_, _synthesizers_, _drums_, _percussions_ and
+_orchestral_. The system consists of three models that are trained separately:
 
 ```
 degraded mixture ──► (1) mixture restoration ──► (2) source separation ──► (3) stem-wise restoration ──► stems
@@ -14,7 +14,7 @@ degraded mixture ──► (1) mixture restoration ──► (2) source separati
    MSRBench degradation types (bandwidth limitation, MP3/AAC, DAC/EnCodec neural codecs, radio,
    cassette, vinyl, live recording). GAN training with a multi-resolution spectral discriminator.
 2. **Source separation**: fine-tunes BS-RoFormer (initialized from the 6-stem BS-RoFormer-SW
-   checkpoint, with new mask estimators for synthesizers, percussions and orchestral) on the 8-stem
+   checkpoint, with new mask estimators for _synthesizers_, _percussions_ and _orchestral_) on the 8-stem
    mss8s dataset (MoisesDB, MUSDB25, RawStems, Slakh2100) with random stem mixing and a data scheduler.
 3. **Stem-wise restoration**: fine-tunes the mixture restoration model separately for each stem
    on (separated stem, clean stem) pairs, which are generated with models (1) and (2).
