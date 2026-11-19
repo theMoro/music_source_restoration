@@ -1,8 +1,12 @@
 # Music Source Restoration (MSR)
 
-Code for our music source restoration system, which restores degraded music mixtures and separates
-them into the stems _vocals_, _guitars_, _bass_, _keyboards_, _synthesizers_, _drums_, _percussions_ and
-_orchestral_. The system consists of three models that are trained separately:
+This repository contains the code for the music source restoration system described in our paper
+[_Restore, Separate, Restore: A Modular Framework for Music Source Restoration_](https://arxiv.org/abs/2610.08284).
+
+The system takes a degraded music mixture,
+restores it, and separates it into eight stems: _vocals_, _guitars_, _bass_, _keyboards_,
+_synthesizers_, _drums_, _percussions_ and _orchestral_. It is a cascade of three models, each
+trained separately:
 
 ```
 degraded mixture ──► (1) mixture restoration ──► (2) source separation ──► (3) stem-wise restoration ──► stems
